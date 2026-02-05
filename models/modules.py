@@ -252,11 +252,11 @@ class LatentEncoder(nn.Module):
             self.encoder = nn.Linear(input_dim, 2 * config.hidden_dim)
         self.config = config
 
-    def forward(self, R, knowledge, n):
+    def forward(self, R, knowledge, n, return_k=False):
         """
         Infer the latent distribution given the global representation
         """
-        drop_knowledge = torch.rand(1) < self.knowledge_dropout
+        drop_knowledge = (torch.rand(1) < self.knowledge_dropout).item()
         if drop_knowledge or knowledge is None:
             k = torch.zeros((R.shape[0], 1, self.knowledge_dim)).to(R.device)
 
@@ -277,7 +277,13 @@ class LatentEncoder(nn.Module):
 
         q_z_stats = self.encoder(encoder_input)
 
-        return q_z_stats
+        if not return_k:
+            return q_z_stats
+
+        k_mask_scalar = (not drop_knowledge) and (knowledge is not None)
+        k_mask = torch.full((R.shape[0],), k_mask_scalar, dtype=torch.bool,
+                            device=R.device)
+        return q_z_stats, k, k_mask
 
     def get_knowledge_embedding(self, knowledge):
         return self.knowledge_encoder(knowledge).unsqueeze(1)

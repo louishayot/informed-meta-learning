@@ -21,21 +21,36 @@ class INP(nn.Module):
         self.train_num_z_samples = config.train_num_z_samples
         self.test_num_z_samples = config.test_num_z_samples
 
-    def forward(self, x_context, y_context, x_target, y_target, knowledge=None):
+    def forward(self, x_context, y_context, x_target, y_target, knowledge=None,
+                return_aux=False):
         x_context = self.x_encoder(x_context)  # [bs, num_context, x_transf_dim]
         x_target = self.x_encoder(x_target)  # [bs, num_context, x_transf_dim]
 
         R = self.encode_globally(x_context, y_context, x_target)
 
-        z_samples, q_z_Cc, q_zCct = self.sample_latent(
-            R, x_context, x_target, y_target, knowledge
-        )
+        if return_aux:
+            z_samples, q_z_Cc, q_zCct, R_from_target, k, k_mask = \
+                self.sample_latent(
+                    R, x_context, x_target, y_target, knowledge, return_k=True)
+        else:
+            z_samples, q_z_Cc, q_zCct, R_from_target = self.sample_latent(
+                R, x_context, x_target, y_target, knowledge)
+
         # reshape z_samples to the shape of x_target
         R_target = self.target_dependent_representation(R, x_target, z_samples)
 
         p_yCc = self.decode_target(x_target, R_target)
 
-        return p_yCc, z_samples, q_z_Cc, q_zCct
+        if not return_aux:
+            return p_yCc, z_samples, q_z_Cc, q_zCct
+
+        aux = {
+            "r_C": R,                # [bs, 1, hidden_dim]
+            "r_T": R_from_target,    # [bs, 1, hidden_dim] during training, None at eval
+            "k": k,                  # [bs, 1, knowledge_dim]
+            "k_mask": k_mask,        # [bs] bool, True = knowledge present
+        }
+        return p_yCc, z_samples, q_z_Cc, q_zCct, aux
 
     def encode_globally(self, x_context, y_context, x_target):
         """
@@ -51,18 +66,24 @@ class INP(nn.Module):
     def get_knowledge_embedding(self, knowledge):
         return self.latent_encoder.get_knowledge_embedding(knowledge)
 
-    def sample_latent(self, R, x_context, x_target, y_target, knowledge):
+    def sample_latent(self, R, x_context, x_target, y_target, knowledge,
+                      return_k=False):
         """
         Sample latent variable z given the global representation
         (and during training given the target)
         """
-        q_zCc = self.infer_latent_dist(R, knowledge, x_context.shape[1])
+        if return_k:
+            q_zCc, k, k_mask = self.infer_latent_dist(
+                R, knowledge, x_context.shape[1], return_k=True)
+        else:
+            q_zCc = self.infer_latent_dist(R, knowledge, x_context.shape[1])
 
         if y_target is not None and self.training:
             R_from_target = self.encode_globally(x_target, y_target, x_target)
             q_zCct = self.infer_latent_dist(R_from_target, knowledge, x_target.shape[1])
             sampling_dist = q_zCct
         else:
+            R_from_target = None
             q_zCct = None
             sampling_dist = q_zCc
 
@@ -71,16 +92,24 @@ class INP(nn.Module):
         else:
             z_samples = sampling_dist.rsample([self.test_num_z_samples])
         # z_samples.shape = [n_z_samples, bs, 1, z_dim]
-        return z_samples, q_zCc, q_zCct
+        if return_k:
+            return z_samples, q_zCc, q_zCct, R_from_target, k, k_mask
+        return z_samples, q_zCc, q_zCct, R_from_target
 
-    def infer_latent_dist(self, R, knowledge, n):
+    def infer_latent_dist(self, R, knowledge, n, return_k=False):
         """
         Infer the latent distribution given the global representation
         """
-        q_z_stats = self.latent_encoder(R, knowledge, n)
+        latent_out = self.latent_encoder(R, knowledge, n, return_k=return_k)
+        if return_k:
+            q_z_stats, k, k_mask = latent_out
+        else:
+            q_z_stats = latent_out
         q_z_loc, q_z_scale = q_z_stats.split(self.config.hidden_dim, dim=-1)
         q_z_scale = 0.01 + 0.99 * F.softplus(q_z_scale)
         q_zCc = MultivariateNormalDiag(q_z_loc, q_z_scale)
+        if return_k:
+            return q_zCc, k, k_mask
         return q_zCc
 
     def target_dependent_representation(self, R, x_target, z_samples):
