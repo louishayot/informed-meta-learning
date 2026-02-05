@@ -131,8 +131,7 @@ def info_nce_align(r, k, k_mask, proj_r, proj_k, temperature=0.1):
 
     if valid.numel() < 2:
         zero = torch.tensor(0.0, device=r.device)
-        nan = torch.tensor(float("nan"), device=r.device)
-        return zero, nan, nan
+        return zero, zero, zero
 
     r_valid = r[valid]
     k_valid = k[valid]

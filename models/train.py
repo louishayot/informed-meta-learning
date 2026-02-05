@@ -71,7 +71,7 @@ class Trainer:
             y_context = torch.gather(y_context, 1, indices)
 
         lambda_align = getattr(self.config, "lambda_align", 0.0)
-        need_aux = lambda_align > 0
+        need_aux = lambda_align > 0 and self.config.use_knowledge
 
         if self.config.use_knowledge:
             output = self.model(
@@ -106,10 +106,13 @@ class Trainer:
                 r, aux["k"], aux["k_mask"],
                 self.model.proj_r, self.model.proj_k, align_temp,
             )
+            n_valid = aux["k_mask"].sum().item()
             results["loss"] = loss_inp + lambda_align * loss_align
+            results["loss_inp"] = loss_inp
             results["loss_align"] = loss_align
             results["retrieval_at1"] = retrieval_at1
             results["cos_mean"] = cos_mean
+            results["n_valid"] = n_valid
 
         return results
 
@@ -159,9 +162,12 @@ class Trainer:
                 wandb.log({"train_kl": kl})
                 if "loss_align" in results:
                     wandb.log({
+                        "train_loss_inp": results["loss_inp"],
+                        "train_loss_total": results["loss"],
                         "train_loss_align": results["loss_align"],
                         "train_retrieval_at1": results["retrieval_at1"],
                         "train_cos_mean": results["cos_mean"],
+                        "train_n_valid": results["n_valid"],
                     })
 
                 if it % EVAL_ITER == 0 and it > 0:
