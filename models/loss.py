@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 
@@ -103,3 +104,52 @@ class NLL(Loss):
             torch.zeros_like(log_E_z_sum_p_yCz),
             -log_E_z_sum_p_yCz,
         )
+
+
+def info_nce_align(r, k, k_mask, proj_r, proj_k, temperature=0.1):
+    """
+    InfoNCE contrastive alignment loss between data representations and
+    knowledge embeddings, using in-batch negatives and cosine similarity.
+
+    Args:
+        r: data representation [bs, 1, hidden_dim]
+        k: knowledge embedding [bs, 1, knowledge_dim]
+        k_mask: boolean mask [bs], True = knowledge present
+        proj_r: projection head for r
+        proj_k: projection head for k
+        temperature: softmax temperature
+
+    Returns:
+        (loss_align, retrieval_at1, cos_mean)
+    """
+    # Squeeze middle dim: [bs, dim]
+    r = r.squeeze(1)
+    k = k.squeeze(1)
+
+    # Filter to valid indices
+    valid = k_mask.nonzero(as_tuple=True)[0]
+
+    if valid.numel() < 2:
+        zero = torch.tensor(0.0, device=r.device)
+        nan = torch.tensor(float("nan"), device=r.device)
+        return zero, nan, nan
+
+    r_valid = r[valid]
+    k_valid = k[valid]
+
+    # Project and L2-normalize
+    v = F.normalize(proj_r(r_valid), dim=-1)  # [N, align_dim]
+    u = F.normalize(proj_k(k_valid), dim=-1)  # [N, align_dim]
+
+    # Cosine similarity logits
+    logits = (v @ u.T) / temperature  # [N, N]
+    labels = torch.arange(v.shape[0], device=r.device)
+
+    loss_align = F.cross_entropy(logits, labels)
+
+    # Metrics
+    with torch.no_grad():
+        retrieval_at1 = (logits.argmax(dim=1) == labels).float().mean()
+        cos_mean = (v * u).sum(dim=-1).mean()
+
+    return loss_align, retrieval_at1, cos_mean
