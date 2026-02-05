@@ -9,7 +9,7 @@ import optuna
 sys.path.insert(0, os.path.dirname(os.path.abspath(os.path.join(__file__, os.pardir))))
 from dataset.utils import setup_dataloaders
 from models.inp import INP
-from models.loss import ELBOLoss
+from models.loss import ELBOLoss, info_nce_align
 
 EVAL_ITER = 500
 SAVE_ITER = 500
@@ -69,6 +69,10 @@ class Trainer:
         if self.config.sort_context:
             x_context, indices = torch.sort(x_context, dim=1)
             y_context = torch.gather(y_context, 1, indices)
+
+        lambda_align = getattr(self.config, "lambda_align", 0.0)
+        need_aux = lambda_align > 0
+
         if self.config.use_knowledge:
             output = self.model(
                 x_context,
@@ -76,14 +80,36 @@ class Trainer:
                 x_target,
                 y_target=y_target,
                 knowledge=knowledge,
+                return_aux=need_aux,
             )
         else:
             output = self.model(
-                x_context, y_context, x_target, y_target=y_target, knowledge=None
+                x_context, y_context, x_target, y_target=y_target, knowledge=None,
+                return_aux=need_aux,
             )
-        loss, kl, negative_ll = self.loss_func(output, y_target)
 
-        results = {"loss": loss, "kl": kl, "negative_ll": negative_ll}
+        if need_aux:
+            *elbo_output, aux = output
+            elbo_output = tuple(elbo_output)
+        else:
+            elbo_output = output
+
+        loss_inp, kl, negative_ll = self.loss_func(elbo_output, y_target)
+
+        results = {"loss": loss_inp, "kl": kl, "negative_ll": negative_ll}
+
+        if need_aux:
+            align_temp = getattr(self.config, "align_temperature", 0.1)
+            use_rT = getattr(self.config, "align_use_rT", True)
+            r = aux["r_T"] if (use_rT and aux["r_T"] is not None) else aux["r_C"]
+            loss_align, retrieval_at1, cos_mean = info_nce_align(
+                r, aux["k"], aux["k_mask"],
+                self.model.proj_r, self.model.proj_k, align_temp,
+            )
+            results["loss"] = loss_inp + lambda_align * loss_align
+            results["loss_align"] = loss_align
+            results["retrieval_at1"] = retrieval_at1
+            results["cos_mean"] = cos_mean
 
         return results
 
@@ -131,6 +157,12 @@ class Trainer:
                 wandb.log({"train_loss": loss})
                 wandb.log({"train_negative_ll": negative_ll})
                 wandb.log({"train_kl": kl})
+                if "loss_align" in results:
+                    wandb.log({
+                        "train_loss_align": results["loss_align"],
+                        "train_retrieval_at1": results["retrieval_at1"],
+                        "train_cos_mean": results["cos_mean"],
+                    })
 
                 if it % EVAL_ITER == 0 and it > 0:
                     losses, val_loss = self.eval()

@@ -223,6 +223,25 @@ def main():
         help="Dimension of knowledge representaiton",
         default=None,
     )
+    # alignment (INP-Align)
+    parser.add_argument(
+        "--lambda-align", type=float, help="Weight for alignment loss", default=0.0
+    )
+    parser.add_argument(
+        "--align-temperature", type=float, help="InfoNCE temperature", default=0.1
+    )
+    parser.add_argument(
+        "--align-dim", type=int, help="Alignment projection dimension", default=64
+    )
+    parser.add_argument(
+        "--align-use-rT",
+        type=str2bool,
+        const=True,
+        nargs="?",
+        help="Use r_T instead of r_C for alignment",
+        default=True,
+    )
+
     # saving args
     parser.add_argument(
         "--run-name-prefix", type=str, help="Run name prefix", default="run"
