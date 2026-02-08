@@ -2,3 +2,7 @@ saves/**
 **/__pycache__/**
 wandb/**
 figures/*
+.DS_Store
+runs_logs/
+runs_patch1_full/
+wandb_patch1_full/
