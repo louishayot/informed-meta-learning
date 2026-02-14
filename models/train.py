@@ -9,7 +9,7 @@ import optuna
 sys.path.insert(0, os.path.dirname(os.path.abspath(os.path.join(__file__, os.pardir))))
 from dataset.utils import setup_dataloaders
 from models.inp import INP
-from models.loss import ELBOLoss
+from models.loss import ELBOLoss, InfoNCEAlignmentLoss
 
 EVAL_ITER = 500
 SAVE_ITER = 500
@@ -36,6 +36,16 @@ class Trainer:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.lr)
 
         self.loss_func = ELBOLoss(beta=config.beta)
+
+        self.alignment_mode = getattr(config, "alignment_mode", "none")
+        self.alignment_lambda = getattr(config, "alignment_lambda", 0.0)
+        if self.alignment_mode != "none" and self.alignment_lambda > 0:
+            self.alignment_loss_func = InfoNCEAlignmentLoss(
+                temperature=getattr(config, "alignment_temperature", 0.1)
+            )
+        else:
+            self.alignment_loss_func = None
+
         if load_path is not None:
             print(f"Loading model from state dict {load_path}")
             state_dict = torch.load(load_path)
@@ -81,9 +91,36 @@ class Trainer:
             output = self.model(
                 x_context, y_context, x_target, y_target=y_target, knowledge=None
             )
-        loss, kl, negative_ll = self.loss_func(output, y_target)
+
+        # Split alignment_info from model output (5-tuple during training w/ knowledge)
+        if len(output) == 5:
+            pred_outputs, alignment_info = output[:4], output[4]
+        else:
+            pred_outputs, alignment_info = output, None
+
+        loss, kl, negative_ll = self.loss_func(pred_outputs, y_target)
 
         results = {"loss": loss, "kl": kl, "predictive_nll": negative_ll}
+
+        # Compute alignment loss if enabled (training only)
+        if (
+            self.alignment_loss_func is not None
+            and alignment_info is not None
+            and self.model.training
+        ):
+            if self.alignment_mode == "rT" and alignment_info["rT"] is not None:
+                r = alignment_info["rT"]
+            elif self.alignment_mode == "rC":
+                r = alignment_info["rC"]
+            else:
+                r = None
+
+            if r is not None:
+                align_metrics = self.alignment_loss_func(alignment_info["k"], r)
+                results["alignment_loss"] = align_metrics["alignment_loss"]
+                results["retrieval_acc"] = align_metrics["retrieval_acc"]
+                results["mean_cosine"] = align_metrics["mean_cosine"]
+                results["loss"] = loss + self.alignment_lambda * align_metrics["alignment_loss"]
 
         return results
 
@@ -131,6 +168,12 @@ class Trainer:
                 wandb.log({"train_loss": loss})
                 wandb.log({"train_predictive_nll": predictive_nll})
                 wandb.log({"train_kl": kl})
+                if "alignment_loss" in results:
+                    wandb.log({
+                        "train_alignment_loss": results["alignment_loss"],
+                        "train_retrieval_acc": results["retrieval_acc"],
+                        "train_mean_cosine": results["mean_cosine"],
+                    })
 
                 if it % EVAL_ITER == 0 and it > 0:
                     losses, val_loss = self.eval()

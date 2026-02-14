@@ -35,6 +35,15 @@ class INP(nn.Module):
 
         p_yCc = self.decode_target(x_target, R_target)
 
+        if self.training and knowledge is not None:
+            k_emb = self.get_knowledge_embedding(knowledge)
+            alignment_info = {
+                "k": k_emb,
+                "rC": q_z_Cc.mean,
+                "rT": q_zCct.mean if q_zCct is not None else None,
+            }
+            return p_yCc, z_samples, q_z_Cc, q_zCct, alignment_info
+
         return p_yCc, z_samples, q_z_Cc, q_zCct
 
     def encode_globally(self, x_context, y_context, x_target):

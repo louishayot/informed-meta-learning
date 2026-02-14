@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 
@@ -103,3 +104,53 @@ class NLL(Loss):
             torch.zeros_like(log_E_z_sum_p_yCz),
             -log_E_z_sum_p_yCz,
         )
+
+
+class InfoNCEAlignmentLoss(nn.Module):
+    """Symmetric InfoNCE to align knowledge embedding k with task representation r."""
+
+    def __init__(self, temperature=0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, k, r):
+        """
+        Args:
+            k: [bs, 1, D] knowledge embeddings
+            r: [bs, 1, D] task representations (rC or rT mean)
+        Returns:
+            dict with alignment_loss, retrieval_acc, mean_cosine, n_valid_pairs
+        """
+        bs = k.shape[0]
+        k = k.reshape(bs, -1)  # [bs, D]
+        r = r.reshape(bs, -1)  # [bs, D]
+
+        if bs < 2:
+            zero = torch.tensor(0.0, device=k.device)
+            return {
+                "alignment_loss": zero,
+                "retrieval_acc": zero,
+                "mean_cosine": zero,
+                "n_valid_pairs": 0,
+            }
+
+        k_norm = F.normalize(k, dim=-1)
+        r_norm = F.normalize(r, dim=-1)
+
+        logits = torch.mm(k_norm, r_norm.t()) / self.temperature  # [bs, bs]
+        labels = torch.arange(bs, device=k.device)
+
+        loss_kr = F.cross_entropy(logits, labels)
+        loss_rk = F.cross_entropy(logits.t(), labels)
+        alignment_loss = (loss_kr + loss_rk) / 2.0
+
+        with torch.no_grad():
+            retrieval_acc = (logits.argmax(dim=1) == labels).float().mean()
+            mean_cosine = (k_norm * r_norm).sum(dim=-1).mean()
+
+        return {
+            "alignment_loss": alignment_loss,
+            "retrieval_acc": retrieval_acc,
+            "mean_cosine": mean_cosine,
+            "n_valid_pairs": bs,
+        }

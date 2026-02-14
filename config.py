@@ -62,6 +62,22 @@ def main():
         "--n-trials", type=int, help="Number of optuna trials", default=1
     )
     parser.add_argument("--beta", type=float, help="Beta VAE", default=1)
+    parser.add_argument(
+        "--alignment-mode",
+        type=str,
+        help="Alignment mode",
+        default="none",
+        choices=["none", "rT", "rC"],
+    )
+    parser.add_argument(
+        "--alignment-lambda", type=float, help="Alignment loss weight", default=0.0
+    )
+    parser.add_argument(
+        "--alignment-temperature",
+        type=float,
+        help="InfoNCE temperature",
+        default=0.1,
+    )
 
     # dataloader
     parser.add_argument(
