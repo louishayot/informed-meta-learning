@@ -83,7 +83,7 @@ class Trainer:
             )
         loss, kl, negative_ll = self.loss_func(output, y_target)
 
-        results = {"loss": loss, "kl": kl, "negative_ll": negative_ll}
+        results = {"loss": loss, "kl": kl, "predictive_nll": negative_ll}
 
         return results
 
@@ -125,11 +125,11 @@ class Trainer:
                 results = self.run_batch_train(batch)
                 loss = results["loss"]
                 kl = results["kl"]
-                negative_ll = results["negative_ll"]
+                predictive_nll = results["predictive_nll"]
                 loss.backward()
                 self.optimizer.step()
                 wandb.log({"train_loss": loss})
-                wandb.log({"train_negative_ll": negative_ll})
+                wandb.log({"train_predictive_nll": predictive_nll})
                 wandb.log({"train_kl": kl})
 
                 if it % EVAL_ITER == 0 and it > 0:
