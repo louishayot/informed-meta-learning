@@ -3,6 +3,7 @@ import wandb
 import numpy as np
 import os
 import sys
+import json
 import toml
 import optuna
 
@@ -17,9 +18,11 @@ MAX_EVAL_IT = 50
 
 
 class Trainer:
-    def __init__(self, config, save_dir, load_path=None, last_save_it=0):
+    def __init__(self, config, save_dir, load_path=None, last_save_it=0, use_wandb=True):
         self.config = config
         self.last_save_it = last_save_it
+        self.use_wandb = use_wandb
+        self.metrics_path = os.path.join(save_dir, "metrics.jsonl")
 
         self.device = config.device
         self.train_dataloader, self.val_dataloader, _, extras = setup_dataloaders(
@@ -74,6 +77,19 @@ class Trainer:
             )
 
         self.save_dir = save_dir
+
+    def _log(self, metrics):
+        """Log metrics to wandb (if enabled) and local JSONL."""
+        if self.use_wandb and wandb.run is not None:
+            wandb.log(metrics)
+        serializable = {}
+        for k, v in metrics.items():
+            if hasattr(v, "item"):
+                serializable[k] = v.item()
+            else:
+                serializable[k] = v
+        with open(self.metrics_path, "a") as f:
+            f.write(json.dumps(serializable) + "\n")
 
     def get_loss(self, x_context, y_context, x_target, y_target, knowledge):
         if self.config.sort_context:
@@ -165,11 +181,9 @@ class Trainer:
                 predictive_nll = results["predictive_nll"]
                 loss.backward()
                 self.optimizer.step()
-                wandb.log({"train_loss": loss})
-                wandb.log({"train_predictive_nll": predictive_nll})
-                wandb.log({"train_kl": kl})
+                self._log({"train_loss": loss, "train_predictive_nll": predictive_nll, "train_kl": kl})
                 if "alignment_loss" in results:
-                    wandb.log({
+                    self._log({
                         "train_alignment_loss": results["alignment_loss"],
                         "train_retrieval_acc": results["retrieval_acc"],
                         "train_mean_cosine": results["mean_cosine"],
@@ -178,10 +192,10 @@ class Trainer:
                 if it % EVAL_ITER == 0 and it > 0:
                     losses, val_loss = self.eval()
                     mean_eval_loss = np.mean(list(losses.values()))
-                    wandb.log({"mean_eval_loss": mean_eval_loss})
-                    wandb.log({"eval_loss": val_loss})
+                    eval_metrics = {"mean_eval_loss": mean_eval_loss, "eval_loss": val_loss}
                     for k, v in losses.items():
-                        wandb.log({f"eval_loss_{k}": v})
+                        eval_metrics[f"eval_loss_{k}"] = v
+                    self._log(eval_metrics)
 
                     if val_loss < min_eval_loss and it > 1500:
                         min_eval_loss = val_loss
@@ -237,43 +251,74 @@ def get_device():
     return device
 
 
-def meta_train(trial, config, run_name_prefix="run"):
+def meta_train(trial, config, run_name_prefix="run", output_dir=None, use_wandb=True):
     device = get_device()
     config.device = device
 
     # Create save folder and save config
-    save_dir = f"./saves/{config.project_name}"
-    os.makedirs(save_dir, exist_ok=True)
+    base_dir = output_dir if output_dir is not None else f"./saves/{config.project_name}"
+    os.makedirs(base_dir, exist_ok=True)
 
-    save_no = len(os.listdir(save_dir))
     save_no = [
         int(x.split("_")[-1])
-        for x in os.listdir(save_dir)
+        for x in os.listdir(base_dir)
         if x.startswith(run_name_prefix)
     ]
     if len(save_no) > 0:
         save_no = max(save_no) + 1
     else:
         save_no = 0
-    save_dir = f"{save_dir}/{run_name_prefix}_{save_no}"
+    save_dir = f"{base_dir}/{run_name_prefix}_{save_no}"
     os.makedirs(save_dir, exist_ok=True)
 
-    trainer = Trainer(config=config, save_dir=save_dir)
+    trainer = Trainer(config=config, save_dir=save_dir, use_wandb=use_wandb)
 
     config = trainer.config
 
     # save config
     config.write_config(f"{save_dir}/config.toml")
 
-    wandb.init(
-        project=config.project_name,
-        name=f"{run_name_prefix}_{save_no}",
-        config=vars(config),
-    )
+    if use_wandb:
+        wandb.init(
+            project=config.project_name,
+            name=f"{run_name_prefix}_{save_no}",
+            config=vars(config),
+        )
     best_eval_loss = trainer.train()
-    wandb.finish()
+    if use_wandb and wandb.run is not None:
+        wandb.finish()
 
     return best_eval_loss
+
+
+def train_from_config(config, output_dir, run_name, use_wandb=False, load_path=None):
+    """Notebook-friendly entry point: train into output_dir/run_name/."""
+    import random
+
+    device = get_device()
+    config.device = device
+
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
+    random.seed(config.seed)
+
+    save_dir = os.path.join(output_dir, run_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    config.write_config(os.path.join(save_dir, "config.toml"))
+
+    if use_wandb:
+        wandb.init(project=config.project_name, name=run_name, config=vars(config))
+
+    trainer = Trainer(
+        config=config, save_dir=save_dir, load_path=load_path, use_wandb=use_wandb
+    )
+    best_eval_loss = trainer.train()
+
+    if use_wandb and wandb.run is not None:
+        wandb.finish()
+
+    return best_eval_loss, save_dir
 
 
 if __name__ == "__main__":
