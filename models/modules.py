@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import MultiheadAttention
-from transformers import RobertaModel, RobertaTokenizer
 
 
 class MLP(nn.Module):
@@ -80,6 +79,7 @@ class RoBERTa(nn.Module):
         super(RoBERTa, self).__init__()
 
         self.dim_model = 768
+        from transformers import RobertaModel
         self.llm = RobertaModel.from_pretrained("roberta-base")
 
         if config.freeze_llm:
@@ -96,6 +96,7 @@ class RoBERTa(nn.Module):
                 param.requires_grad = True
 
         self.device = config.device
+        from transformers import RobertaTokenizer
         self.tokenizer = RobertaTokenizer.from_pretrained(
             "roberta-base", truncation=True, do_lower_case=True
         )
