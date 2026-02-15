@@ -1,2 +1,13 @@
+# Block all heavy binaries (checkpoints, raw logs)
 *
+
+# Allow this file
 !.gitignore
+
+# Evaluation results
+!stepB_eval.tsv
+!stepB_eval.json
+
+# Paper-ready figures
+!paper_figures/
+!paper_figures/**
