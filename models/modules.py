@@ -79,7 +79,13 @@ class RoBERTa(nn.Module):
         super(RoBERTa, self).__init__()
 
         self.dim_model = 768
-        from transformers import RobertaModel
+        try:
+            from transformers import RobertaModel, RobertaTokenizer
+        except ImportError:
+            raise ImportError(
+                "Module 'transformers' not found. "
+                "Please install it to use text_encoder='roberta'."
+            )
         self.llm = RobertaModel.from_pretrained("roberta-base")
 
         if config.freeze_llm:
@@ -96,7 +102,6 @@ class RoBERTa(nn.Module):
                 param.requires_grad = True
 
         self.device = config.device
-        from transformers import RobertaTokenizer
         self.tokenizer = RobertaTokenizer.from_pretrained(
             "roberta-base", truncation=True, do_lower_case=True
         )

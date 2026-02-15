@@ -128,7 +128,13 @@ class Temperatures(Dataset):
         elif knowledge_type in ["min_max", "min_max_month"]:
             self.knowledge_df = pd.read_csv(f"{root}/2021-2022_{region}_knowledge.csv")
         elif knowledge_type == "llama_embed":
-            from datasets import load_from_disk
+            try:
+                from datasets import load_from_disk
+            except ImportError:
+                raise ImportError(
+                    "Module 'datasets' not found. "
+                    "Please install it to use knowledge_type='llama_embed'."
+                )
             knowledge_ds = load_from_disk(
                 f"{root}/2021-2022_{region}_desc-embeded-llama"
             )
